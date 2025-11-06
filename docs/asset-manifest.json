@@ -1,17 +1,16 @@
 {
   "files": {
     "main.css": "/3d-lab-viewer/static/css/main.f855e6bc.css",
-    "main.js": "/3d-lab-viewer/static/js/main.2a0e907d.js",
-    "static/js/66.1f99b43a.chunk.js": "/3d-lab-viewer/static/js/66.1f99b43a.chunk.js",
+    "main.js": "/3d-lab-viewer/static/js/main.fc116945.js",
     "static/js/453.e227fdaa.chunk.js": "/3d-lab-viewer/static/js/453.e227fdaa.chunk.js",
+    "static/media/yacht.glb": "/3d-lab-viewer/static/media/yacht.1395901a1cb594585f8e.glb",
     "index.html": "/3d-lab-viewer/index.html",
     "main.f855e6bc.css.map": "/3d-lab-viewer/static/css/main.f855e6bc.css.map",
-    "main.2a0e907d.js.map": "/3d-lab-viewer/static/js/main.2a0e907d.js.map",
-    "66.1f99b43a.chunk.js.map": "/3d-lab-viewer/static/js/66.1f99b43a.chunk.js.map",
+    "main.fc116945.js.map": "/3d-lab-viewer/static/js/main.fc116945.js.map",
     "453.e227fdaa.chunk.js.map": "/3d-lab-viewer/static/js/453.e227fdaa.chunk.js.map"
   },
   "entrypoints": [
     "static/css/main.f855e6bc.css",
-    "static/js/main.2a0e907d.js"
+    "static/js/main.fc116945.js"
   ]
 }
