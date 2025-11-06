@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useEffect,useLayoutEffect } from "react";
+import React, { useMemo, useRef, useEffect } from "react";
 import * as THREE from "three";
 import { OrbitControls, TransformControls, Grid, ContactShadows } from "@react-three/drei";
 
@@ -49,8 +49,6 @@ export default function SceneInner({
                                        onModelScene,
                                    }) {
     // --- keep a ref to every node/room's top-level THREE.Group
-    const orbit = useRef();
-    const tctrl = useRef();
     const nodeRefs = useRef({});
     const roomRefs = useRef({});
 
@@ -58,45 +56,26 @@ export default function SceneInner({
     const selectedNode = selected?.type === "node" ? nodeMap[selected.id] : null;
     const selectedRoom = selected?.type === "room" ? rooms.find((r) => r.id === selected.id) : null;
 
-
     // --- TransformControls (gizmo) that we attach imperatively to the real object
+    const tcRef = useRef();
 
     // attach/detach to the current selection
-    useLayoutEffect(() => {
-        const ctrl = tctrl.current;
-        if (!ctrl) return;
+    useEffect(() => {
+        if (!tcRef.current) return;
 
-        // Mode & coordinate space
-        ctrl.setMode(transformMode);
-        ctrl.setSpace(transformMode === "translate" ? "world" : "local");
-
-        if (!moveMode || !selected) {
-            ctrl.detach();
-            ctrl.visible = false;
-            return;
+        let target = null;
+        if (moveMode && selectedNode) {
+            target = nodeRefs.current[selectedNode.id]?.current || null;
+        } else if (moveMode && selectedRoom) {
+            target = roomRefs.current[selectedRoom.id]?.current || null;
         }
 
-        let targetRef = null;
-        if (selected.type === "node") {
-            targetRef = nodeRefs.current.get(selected.id);
-        } else if (selected.type === "room") {
-            targetRef = roomRefs.current.get(selected.id);
+        if (target) {
+            tcRef.current.attach(target);
         } else {
-            // links and other types are not handled by transform controls
-            ctrl.detach();
-            ctrl.visible = false;
-            return;
+            tcRef.current.detach();
         }
-
-        const obj = targetRef && targetRef.current;
-        if (obj) {
-            ctrl.attach(obj);          // <— this immediately positions the gizmo on the object's world center
-            ctrl.visible = true;
-        } else {
-            ctrl.detach();
-            ctrl.visible = false;
-        }
-    }, [selected, moveMode, transformMode]);
+    }, [moveMode, selectedNode?.id, selectedRoom?.id, transformMode]);
 
     // while dragging, disable orbit + guard selection clearing
     useEffect(() => {
