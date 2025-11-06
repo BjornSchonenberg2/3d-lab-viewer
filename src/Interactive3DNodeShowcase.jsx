@@ -5,6 +5,7 @@ import { OrbitControls, StatsGl } from "@react-three/drei";
 import JSZip from "jszip";
 import { saveAs } from "file-saver";
 import { v4 as uuid } from "uuid";
+import { STATIC_MODELS } from "./data/models/registry";
 
 import SceneInner from "./SceneInner.jsx";
 // If you are NOT using SceneInner, comment the line above and uncomment the 4 lines below:
@@ -298,6 +299,8 @@ export default function Interactive3DNodeShowcase() {
   const [modelFilename, setModelFilename] = useState("");
   const [modelBounds, setModelBounds] = useState(null);
   const modelRef = useRef();
+  const [modelVisible, setModelVisible] = useState(true);
+  const [currentModelId, setCurrentModelId] = useState(localStorage.getItem("epic3d.static.current") || (STATIC_MODELS[0]?.id || ""));
 
   // Entities
   const [rooms, setRooms] = useState(() => {
@@ -418,6 +421,11 @@ export default function Interactive3DNodeShowcase() {
 
   // View & perf
   const [wireframe, setWireframe] = useState(false);
+  const [wireOpacity, setWireOpacity] = useState(0.6); // NEW: default a bit subtle
+  const [labelsOn, setLabelsOn] = useState(true);
+  const [labelMode, setLabelMode] = useState("billboard"); // "billboard" | "3d" | "static"
+  const [labelSize, setLabelSize] = useState(0.24);        // world units
+
   const [showLights, setShowLights] = useState(true);
   const [showLightBounds, setShowLightBounds] = useState(false);
   const [roomOpacity, setRoomOpacity] = useState(0.12);
@@ -465,6 +473,25 @@ export default function Interactive3DNodeShowcase() {
   useEffect(() => localStorage.setItem("epic3d.links.v7", JSON.stringify(links)), [links]);
   useEffect(() => localStorage.setItem("epic3d.actions.v7", JSON.stringify(actions)), [actions]);
   useEffect(() => localStorage.setItem("epic3d.linkDefaults.v1", JSON.stringify(linkDefaults)), [linkDefaults]);
+  useEffect(() => {
+    const meta = STATIC_MODELS.find(m => m.id === currentModelId);
+    if (!meta) {
+      if (STATIC_MODELS[0]) {
+        // fallback so a model *always* shows
+        setCurrentModelId(STATIC_MODELS[0].id);
+      } else {
+        setModelDescriptor(null);
+        setModelBlob(null);
+        setModelFilename("");
+      }
+      return;
+    }
+    setModelDescriptor({ type: meta.type, url: meta.url });
+    setModelBlob(null);
+    setModelFilename(`${meta.name}.${meta.type}`);
+    localStorage.setItem("epic3d.static.current", meta.id);
+  }, [currentModelId]);
+
 
   useEffect(() => {
     const stop = () => setUiInteracting(false);
@@ -660,6 +687,23 @@ export default function Interactive3DNodeShowcase() {
           )
       );
     }
+  };
+// Duplicate a room; offsets it on X so it's not overlapping the original
+  const duplicateRoom = (roomId) => {
+    const orig = rooms.find((r) => r.id === roomId);
+    if (!orig) return;
+    const offX = Math.max(1, (orig.size?.[0] ?? 1)) + 0.5;
+
+    const copy = {
+      ...orig,
+      id: uuid(),
+      name: `${orig.name} Copy`,
+      center: [ (orig.center?.[0] ?? 0) + offX, (orig.center?.[1] ?? 0), (orig.center?.[2] ?? 0) ],
+      // keep size/rotation/color/visible as-is
+    };
+
+    setRooms((prev) => [...prev, copy]);
+    setSelected({ type: "room", id: copy.id });
   };
 
   const onPlace = (kind, p, multi) => {
@@ -862,7 +906,63 @@ export default function Interactive3DNodeShowcase() {
             <option value="rotate">Rotate</option>
             <option value="scale">Scale</option>
           </Select>
+          {/* Static Model selector */}
+          <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <span style={{ fontSize: 12, opacity: 0.85 }}>Model</span>
+            <Select
+                style={{ minWidth: 180 }}
+                value={currentModelId}
+                onChange={(e) => setCurrentModelId(e.target.value)}
+            >
+              <option value="">(none)</option>
+              {STATIC_MODELS.map((m) => (
+                  <option key={m.id} value={m.id}>{m.name}</option>
+              ))}
+            </Select>
+            <Btn onClick={() => setModelVisible((v) => !v)}>
+              {modelVisible ? "Hide Model" : "Show Model"}
+            </Btn>
+          </label>
+
         </div>
+        <div style={{ marginTop: 8 }}>
+          <label>
+            Wireframe Transparency
+            <Slider
+                value={wireOpacity}
+                min={0.05}
+                max={1}
+                step={0.01}
+                onChange={(v) => setWireOpacity(v)}
+            />
+          </label>
+        </div>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <Btn onClick={() => setLabelsOn(v => !v)}>{labelsOn ? "Labels: On" : "Labels: Off"}</Btn>
+          <Select value={labelMode} onChange={(e) => setLabelMode(e.target.value)}>
+            <option value="billboard">Billboard</option>
+            <option value="3d">3D</option>
+            <option value="static">Static</option>
+          </Select>
+          <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <span style={{ fontSize: 12, opacity: 0.85 }}>Size</span>
+            <Input
+                type="number"
+                step="0.02"
+                value={labelSize}
+                onChange={(e) => setLabelSize(Math.max(0.04, Number(e.target.value) || 0.04))}
+                onWheel={(e) => {
+                  e.preventDefault(); e.stopPropagation();
+                  const dir = e.deltaY < 0 ? 1 : -1;
+                  const next = Math.max(0.04, +(labelSize + dir * 0.02).toFixed(3));
+                  setLabelSize(next);
+                }}
+                style={{ width: 80 }}
+            />
+          </label>
+        </div>
+
+
       </div>
   );
 
@@ -960,6 +1060,7 @@ export default function Interactive3DNodeShowcase() {
                               onChange={(v) => setRooms((prev) => prev.map((r) => (r.id === rid ? { ...r, visible: v } : r)))}
                               label="visible"
                           />
+                          <Btn onClick={() => duplicateRoom(rid)}>Duplicate</Btn>
                           <Btn onClick={() => requestDelete({ type: "room", id: rid })}>Delete</Btn>
                         </div>
                     )}
@@ -1440,6 +1541,7 @@ export default function Interactive3DNodeShowcase() {
               return (
                   <Panel title={n.kind === "switch" ? "Switch Inspector" : "Node Inspector"}>
                     <div style={{ display: "grid", gap: 8 }}>
+
                       <label>
                         Name
                         <Input value={n.label} onChange={(e) => setNode(n.id, { label: e.target.value })} />
@@ -1498,6 +1600,135 @@ export default function Interactive3DNodeShowcase() {
                             }}
                         />
                       </label>
+                      {/* --- Shape & Size --- */}
+                      {(() => {
+                        const shape = n.shape || { type: "sphere", radius: 0.32 };
+                        const setShape = (patch) => setNode(n.id, { shape: { ...shape, ...patch } });
+
+                        const setShapeType = (type) => {
+                          // sensible defaults per shape
+                          const defaults = {
+                            sphere:   { type: "sphere",   radius: 0.32 },
+                            box:      { type: "box",      scale: [0.6, 0.3, 0.6] },
+                            square:   { type: "square",   scale: [0.6, 0.3, 0.6] }, // alias of box
+                            disc:     { type: "disc",     radius: 0.35, height: 0.08 },
+                            circle:   { type: "circle",   radius: 0.35, height: 0.08 }, // alias of disc
+                            cylinder: { type: "cylinder", radius: 0.3,  height: 0.6 },
+                            hexagon:  { type: "hexagon",  radius: 0.35, height: 0.5 },
+                            cone:     { type: "cone",     radius: 0.35, height: 0.7 },
+                            switch:   { type: "switch",   w: 0.9, h: 0.12, d: 0.35 },
+                          };
+                          setNode(n.id, { shape: defaults[type] || { type } });
+                        };
+
+                        const NumberInput = ({ value, onChange, step = 0.05, min = 0.01 }) => (
+                            <Input
+                                type="number"
+                                step={step}
+                                value={value}
+                                onChange={(e) => onChange(Math.max(min, Number(e.target.value) || min))}
+                                onWheel={(e) => {
+                                  e.preventDefault(); e.stopPropagation();
+                                  const dir = e.deltaY < 0 ? 1 : -1;
+                                  onChange(Math.max(min, +(value + dir * step).toFixed(3)));
+                                }}
+                            />
+                        );
+
+                        return (
+                            <>
+                              <div style={{ borderTop: "1px dashed rgba(255,255,255,0.15)", paddingTop: 8, marginTop: 8 }}>
+                                <div style={{ fontWeight: 900, marginBottom: 6 }}>Shape</div>
+                                <Select
+                                    value={(shape.type || "sphere").toLowerCase()}
+                                    onChange={(e) => setShapeType(e.target.value)}
+                                >
+                                  <option value="sphere">Sphere</option>
+                                  <option value="square">Square (Box)</option>
+                                  <option value="disc">Circle (Disc)</option>
+                                  <option value="cylinder">Cylinder</option>
+                                  <option value="hexagon">Hexagon</option>
+                                  <option value="cone">Cone</option>
+                                  <option value="switch">Switch</option>
+                                </Select>
+                              </div>
+
+                              {/* Per-shape size controls */}
+                              {["sphere"].includes(shape.type) && (
+                                  <label>
+                                    Radius
+                                    <NumberInput value={shape.radius ?? 0.32} onChange={(v) => setShape({ radius: v })} step={0.02} />
+                                  </label>
+                              )}
+
+                              {["box", "square"].includes(shape.type) && (
+                                  <div>
+                                    <div style={{ fontSize: 12, opacity: 0.85, marginBottom: 4 }}>Scale (x,y,z)</div>
+                                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
+                                      <label>
+                                        X
+                                        <NumberInput
+                                            value={shape.scale?.[0] ?? 0.6}
+                                            onChange={(v) => setShape({ scale: [v, shape.scale?.[1] ?? 0.3, shape.scale?.[2] ?? 0.6] })}
+                                            step={0.05}
+                                        />
+                                      </label>
+                                      <label>
+                                        Y
+                                        <NumberInput
+                                            value={shape.scale?.[1] ?? 0.3}
+                                            onChange={(v) => setShape({ scale: [shape.scale?.[0] ?? 0.6, v, shape.scale?.[2] ?? 0.6] })}
+                                            step={0.05}
+                                        />
+                                      </label>
+                                      <label>
+                                        Z
+                                        <NumberInput
+                                            value={shape.scale?.[2] ?? 0.6}
+                                            onChange={(v) => setShape({ scale: [shape.scale?.[0] ?? 0.6, shape.scale?.[1] ?? 0.3, v] })}
+                                            step={0.05}
+                                        />
+                                      </label>
+                                    </div>
+                                  </div>
+                              )}
+
+                              {["disc", "circle", "cylinder", "hexagon", "cone"].includes(shape.type) && (
+                                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                                    <label>
+                                      Radius
+                                      <NumberInput value={shape.radius ?? 0.35} onChange={(v) => setShape({ radius: v })} step={0.02} />
+                                    </label>
+                                    <label>
+                                      Height
+                                      <NumberInput
+                                          value={shape.height ?? (shape.type === "disc" || shape.type === "circle" ? 0.08 : 0.6)}
+                                          onChange={(v) => setShape({ height: v })}
+                                          step={0.02}
+                                      />
+                                    </label>
+                                  </div>
+                              )}
+
+                              {shape.type === "switch" && (
+                                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
+                                    <label>
+                                      W
+                                      <NumberInput value={shape.w ?? 0.9} onChange={(v) => setShape({ w: v })} step={0.02} />
+                                    </label>
+                                    <label>
+                                      H
+                                      <NumberInput value={shape.h ?? 0.12} onChange={(v) => setShape({ h: v })} step={0.02} />
+                                    </label>
+                                    <label>
+                                      D
+                                      <NumberInput value={shape.d ?? 0.35} onChange={(v) => setShape({ d: v })} step={0.02} />
+                                    </label>
+                                  </div>
+                              )}
+                            </>
+                        );
+                      })()}
 
                       {/* Light */}
                       <div style={{ borderTop: "1px dashed rgba(255,255,255,0.15)", paddingTop: 8, marginTop: 8 }}>
@@ -1618,20 +1849,70 @@ export default function Interactive3DNodeShowcase() {
                             }}
                         />
                       </label>
-                      <label>
-                        Size (x,y,z)
-                        <Input
-                            value={r.size.join(", ")}
-                            onChange={(e) => {
-                              const parts = e.target.value.split(",").map((v) => Math.max(0.1, Number(v.trim()) || 1));
-                              if (parts.length === 3) setRoom(r.id, { size: parts });
-                            }}
-                        />
-                      </label>
+                      <div>
+                          <div style={{ fontSize: 12, opacity: 0.85, marginBottom: 4 }}>Size (x,y,z)</div>
+                          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
+                            <label>
+                              X
+                              <Input
+                                type="number"
+                                step="0.1"
+                                value={r.size?.[0] ?? 1}
+                                onChange={(e) => {
+                                  const nx = Math.max(0.1, Number(e.target.value) || 0.1);
+                                  setRoom(r.id, { size: [nx, r.size?.[1] ?? 1, r.size?.[2] ?? 1] });
+                                }}
+                                onWheel={(e) => {
+                                  e.preventDefault(); e.stopPropagation();
+                                  const dir = e.deltaY < 0 ? 1 : -1;
+                                  const nx = Math.max(0.1, +( (r.size?.[0] ?? 1) + dir * 0.1 ).toFixed(2));
+                                  setRoom(r.id, { size: [nx, r.size?.[1] ?? 1, r.size?.[2] ?? 1] });
+                                }}
+                              />
+                            </label>
+                            <label>
+                              Y
+                              <Input
+                                type="number"
+                                step="0.1"
+                                value={r.size?.[1] ?? 1}
+                                onChange={(e) => {
+                                  const ny = Math.max(0.1, Number(e.target.value) || 0.1);
+                                  setRoom(r.id, { size: [r.size?.[0] ?? 1, ny, r.size?.[2] ?? 1] });
+                                }}
+                                onWheel={(e) => {
+                                  e.preventDefault(); e.stopPropagation();
+                                  const dir = e.deltaY < 0 ? 1 : -1;
+                                  const ny = Math.max(0.1, +( (r.size?.[1] ?? 1) + dir * 0.1 ).toFixed(2));
+                                  setRoom(r.id, { size: [r.size?.[0] ?? 1, ny, r.size?.[2] ?? 1] });
+                                }}
+                              />
+                            </label>
+                            <label>
+                              Z
+                              <Input
+                                type="number"
+                                step="0.1"
+                                value={r.size?.[2] ?? 1}
+                                onChange={(e) => {
+                                  const nz = Math.max(0.1, Number(e.target.value) || 0.1);
+                                  setRoom(r.id, { size: [r.size?.[0] ?? 1, r.size?.[1] ?? 1, nz] });
+                                }}
+                                onWheel={(e) => {
+                                  e.preventDefault(); e.stopPropagation();
+                                  const dir = e.deltaY < 0 ? 1 : -1;
+                                  const nz = Math.max(0.1, +( (r.size?.[2] ?? 1) + dir * 0.1 ).toFixed(2));
+                                  setRoom(r.id, { size: [r.size?.[0] ?? 1, r.size?.[1] ?? 1, nz] });
+                                }}
+                              />
+                            </label>
+                          </div>
+                        </div>
                       <label>
                         Opacity
                         <Slider value={roomOpacity} min={0.02} max={0.5} step={0.01} onChange={(v) => setRoomOpacity(v)} />
                       </label>
+                      <Btn onClick={() => duplicateRoom(r.id)}>Duplicate Room</Btn>
                       <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8 }}>
                         <Btn onClick={() => requestDelete({ type: "room", id: r.id })}>Delete Room</Btn>
                       </div>
@@ -1882,6 +2163,11 @@ export default function Interactive3DNodeShowcase() {
             <SceneInner
                 modelDescriptor={modelDescriptor}
                 wireframe={wireframe}
+                wireOpacity={wireOpacity}
+            showModel={modelVisible}
+                labelsOn={labelsOn}
+                labelMode={labelMode}
+                labelSize={labelSize}
                 rooms={rooms}
                 nodes={nodes}
                 links={links}

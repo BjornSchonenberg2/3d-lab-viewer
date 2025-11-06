@@ -1,5 +1,4 @@
 import React, { useMemo, useRef, useEffect } from "react";
-import * as THREE from "three";
 import { OrbitControls, TransformControls, Grid, ContactShadows } from "@react-three/drei";
 
 import ImportedModel from "./gltf/ImportedModel.jsx";
@@ -12,7 +11,9 @@ export default function SceneInner({
                                        // scene/model
                                        modelDescriptor,
                                        wireframe,
+                                       wireOpacity = 1,
                                        modelRef,
+                                       showModel = true,
 
                                        // data
                                        rooms = [],
@@ -34,6 +35,14 @@ export default function SceneInner({
                                        showLights = true,
                                        showLightBounds = false,
 
+                                       // labels
+                                       labelsOn = true,
+                                       labelMode = "billboard",              // "billboard" | "3d" | "static"
+                                       labelSize = 0.24,
+                                        labelMaxWidth = 24,
+                                        label3DLayers = 8,
+                                        label3DStep = 0.01,
+
                                        // placement
                                        placement,                            // { armed, placeKind, multi, snap }
                                        onPlace,
@@ -53,29 +62,19 @@ export default function SceneInner({
     const roomRefs = useRef({});
 
     const nodeMap = useMemo(() => Object.fromEntries(nodes.map((n) => [n.id, n])), [nodes]);
-    const selectedNode = selected?.type === "node" ? nodeMap[selected.id] : null;
-    const selectedRoom = selected?.type === "room" ? rooms.find((r) => r.id === selected.id) : null;
+    const selectedNode = selected?.type === "node" ? nodeMap[selected?.id] : null;
+    const selectedRoom = selected?.type === "room" ? rooms.find((r) => r.id === selected?.id) : null;
 
-    // --- TransformControls (gizmo) that we attach imperatively to the real object
+    // --- TransformControls (gizmo)
     const tcRef = useRef();
 
-    // attach/detach to the current selection
-    useEffect(() => {
-        if (!tcRef.current) return;
-
-        let target = null;
-        if (moveMode && selectedNode) {
-            target = nodeRefs.current[selectedNode.id]?.current || null;
-        } else if (moveMode && selectedRoom) {
-            target = roomRefs.current[selectedRoom.id]?.current || null;
-        }
-
-        if (target) {
-            tcRef.current.attach(target);
-        } else {
-            tcRef.current.detach();
-        }
-    }, [moveMode, selectedNode?.id, selectedRoom?.id, transformMode]);
+    // compute the actual THREE.Object3D target for the current selection
+    const tcTarget = useMemo(() => {
+        if (!moveMode) return null;
+        if (selectedNode) return nodeRefs.current[selectedNode.id]?.current || null;
+        if (selectedRoom) return roomRefs.current[selectedRoom.id]?.current || null;
+        return null;
+    }, [moveMode, selectedNode?.id, selectedRoom?.id]);
 
     // while dragging, disable orbit + guard selection clearing
     useEffect(() => {
@@ -87,7 +86,12 @@ export default function SceneInner({
         };
         tcRef.current.addEventListener("dragging-changed", onDrag);
         return () => tcRef.current?.removeEventListener("dragging-changed", onDrag);
-    }, [dragState, missGuardRef]);
+    }, [dragState, missGuardRef, tcTarget]);
+
+    // clear modelRef when hidden so it cannot be raycast
+    useEffect(() => {
+        if (!showModel && modelRef) modelRef.current = null;
+    }, [showModel, modelRef]);
 
     const stop = (e) => {
         e?.stopPropagation?.();
@@ -99,11 +103,13 @@ export default function SceneInner({
             <ambientLight intensity={0.6} />
             <directionalLight position={[6, 8, 6]} intensity={0.4} castShadow />
 
-            {modelDescriptor && (
+            {/* MODEL */}
+            {showModel && modelDescriptor && (
                 <group ref={modelRef}>
                     <ImportedModel
                         descriptor={modelDescriptor}
                         wireframe={wireframe}
+                        wireOpacity={wireOpacity}
                         onScene={(scene) => {
                             if (modelRef) modelRef.current = scene;  // raycast target for placement
                             if (typeof onModelScene === "function") onModelScene(scene);
@@ -112,7 +118,7 @@ export default function SceneInner({
                 </group>
             )}
 
-            {/* Rooms */}
+            {/* ROOMS */}
             {rooms.map((r) => {
                 roomRefs.current[r.id] ||= React.createRef();
                 return (
@@ -123,11 +129,18 @@ export default function SceneInner({
                         selected={selected?.type === "room" && selected.id === r.id}
                         onPointerDown={(id) => setSelected?.({ type: "room", id })}
                         dragging={!!dragState?.active}
+                         labelsOn={labelsOn}
+                 labelMode={labelMode}
+                 labelSize={labelSize}
+                        labelMaxWidth={labelMaxWidth}
+                        label3DLayers={label3DLayers}
+                        label3DStep={label3DStep}
+
                     />
                 );
             })}
 
-            {/* Nodes */}
+            {/* NODES */}
             {nodes.map((n) => {
                 nodeRefs.current[n.id] ||= React.createRef();
                 return (
@@ -144,11 +157,17 @@ export default function SceneInner({
                         showLights={showLights}
                         showLightBoundsGlobal={showLightBounds}
                         dragging={!!dragState?.active}
+                        labelsOn={labelsOn}
+                        labelMode={labelMode}
+                        labelSize={labelSize}
+                        labelMaxWidth={labelMaxWidth}  // keep this if you have it in state; or omit to use default
+                        label3DLayers={label3DLayers}  // optional
+                        label3DStep={label3DStep}      // optional
                     />
                 );
             })}
 
-            {/* Links */}
+            {/* LINKS */}
             {links.map((l) => {
                 const a = nodeMap[l.from];
                 const b = nodeMap[l.to];
@@ -166,10 +185,11 @@ export default function SceneInner({
                 );
             })}
 
-            {/* TransformControls is now standalone and attached to the real object */}
-            {moveMode && (selectedNode || selectedRoom) && (
+            {/* GIZMO */}
+            {moveMode && tcTarget && (
                 <TransformControls
                     ref={tcRef}
+                    object={tcTarget}
                     mode={transformMode}
                     size={1.0}
                     space="world"

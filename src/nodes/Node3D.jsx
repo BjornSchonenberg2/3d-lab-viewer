@@ -1,135 +1,252 @@
-import React, { memo, forwardRef, useMemo, useRef, useEffect } from "react";
+import React, { memo, forwardRef, useMemo, useRef, useEffect, useState } from "react";
 import * as THREE from "three";
+import { Billboard, Text } from "@react-three/drei";
+import { useThree, useFrame } from "@react-three/fiber";
+
 import GeometryForShape from "../geometry/GeometryForShape.jsx";
 import LightBounds from "../lights/LightBounds.jsx";
 import { clusterColor } from "../utils/clusters.js";
 
-/**
- * Node3D
- * - forwards its root group ref so TransformControls can attach directly
- * - positions & rotates from node.position / node.rotation
- * - clickable surface -> calls onPointerDown(node.id)
- * - optional light (spot/point) driven by node.light {type, yaw, pitch, distance, intensity}
- * - shows LightBounds helper when enabled
- */
 const Node3D = memo(
     forwardRef(function Node3D(
-        { node, selected, onPointerDown, showLights, dragging, showLightBoundsGlobal },
+        {
+            node,
+            selected = false,
+            onPointerDown,
+            dragging = false,
+
+            // visuals
+            showLights = true,
+            showLightBoundsGlobal = false,
+
+            // labels
+            labelsOn = true,
+            labelMode = "billboard",   // "billboard" | "3d" | "static"
+            labelSize = 0.24,
+            labelMaxWidth = 24,        // wider before wrapping
+            label3DLayers = 8,         // how many stacked layers for 3D look
+            label3DStep = 0.01,        // depth step per layer (world units)
+        },
         ref
     ) {
-        const emissiveColor = useMemo(
-            () => new THREE.Color(node.color || clusterColor(node.cluster)),
-            [node.color, node.cluster]
-        );
-        const emissiveIntensity = node.glowOn ? (node.glow ?? 0.8) : 0.0;
+        const position = node?.position || [0, 0, 0];
+        const rotation = node?.rotation || [0, 0, 0];
+        const baseColor = node?.color || clusterColor(node?.cluster);
+        const visible = node?.visible !== false;
 
-        const light = node.light || {};
-        const yaw = (light.yaw ?? 0) * (Math.PI / 180);
-        const pitch = (light.pitch ?? -30) * (Math.PI / 180);
-        const dist = light.distance ?? 8;
-        const intensity = light.intensity ?? 1.2;
-
-        // compute light direction from yaw/pitch (y up)
-        const dir = useMemo(() => {
-            const v = new THREE.Vector3();
-            v.x = Math.cos(pitch) * Math.sin(yaw);
-            v.y = Math.sin(pitch);
-            v.z = Math.cos(pitch) * Math.cos(yaw);
-            return v.normalize();
-        }, [yaw, pitch]);
-
-        const shape = node.shape || { kind: "sphere", radius: 0.32 };
-        const baseColor = node.color || clusterColor(node.cluster);
+        const labelText = node?.label || node?.name || node?.id;
 
         const handlePointerDown = (e) => {
-            // prevent canvas onPointerMissed from clearing selection
             e.stopPropagation();
             if (dragging) return;
             onPointerDown?.(node.id);
         };
 
-        // SpotLight target wiring
-        const spotRef = useRef();
-        const targetRef = useRef();
+        // label vertical offset based on shape
+        const yOffset = useMemo(() => {
+            const s = node?.shape || {};
+            const t = (s.type || "sphere").toLowerCase();
+            if (t === "sphere")   return (s.radius ?? 0.32) + 0.12;
+            if (t === "cylinder") return (s.height ?? 0.6) / 2 + 0.12;
+            if (t === "cone")     return (s.height ?? 0.7) / 2 + 0.12;
+            if (t === "disc" || t === "circle") return (s.height ?? 0.08) / 2 + 0.12;
+            if (t === "hexagon")  return (s.height ?? 0.5) / 2 + 0.12;
+            if (t === "switch")   return (s.h ?? 0.12) / 2 + 0.12;
+            if (t === "box" || t === "square") return (s.scale?.[1] ?? 0.3) / 2 + 0.12;
+            return 0.44;
+        }, [node?.shape]);
 
-        useEffect(() => {
-            if (spotRef.current && targetRef.current) {
-                spotRef.current.target = targetRef.current;
+        // STATIC label visibility toggle (only show when camera is in front)
+        const labelRef = useRef();
+        const { camera } = useThree();
+        useFrame(() => {
+            if (!labelRef.current) return;
+            if (labelMode !== "static") {
+                labelRef.current.visible = true;
+                return;
             }
-        }, []);
+            const m = labelRef.current.matrixWorld;
+            const forward = new THREE.Vector3(0, 0, 1).applyMatrix4(new THREE.Matrix4().extractRotation(m));
+            const worldPos = new THREE.Vector3().setFromMatrixPosition(m);
+            const toCam = new THREE.Vector3().subVectors(camera.position, worldPos).normalize();
+            labelRef.current.visible = forward.dot(toCam) > 0;
+        });
 
-        // keep target in front of node based on current dir/dist
-        useEffect(() => {
-            if (!targetRef.current) return;
-            targetRef.current.position.set(dir.x * dist, dir.y * dist, dir.z * dist);
-        }, [dir, dist]);
+        // Check if the 3D font file exists to avoid crashes; fall back if missing
+
+
+        const textProps = {
+            fontSize: labelSize,
+            maxWidth: labelMaxWidth,
+            anchorX: "center",
+            anchorY: "bottom",
+            color: "white",
+            outlineWidth: 0.005,
+            outlineColor: "#000000",
+            depthTest: false,
+            depthWrite: false,
+            renderOrder: 9999,
+        };
+
+        // selection halo inflate
+        const inflateShape = (shape) => {
+            const s = shape || {};
+            const t = (s.type || "sphere").toLowerCase();
+            if (t === "sphere") return { ...s, radius: (s.radius ?? 0.32) + 0.02 };
+            if (t === "cylinder" || t === "hexagon" || t === "disc" || t === "circle")
+                return { ...s, radius: (s.radius ?? 0.35) + 0.02, height: (s.height ?? 0.6) + 0.02 };
+            if (t === "cone") return { ...s, radius: (s.radius ?? 0.35) + 0.02, height: (s.height ?? 0.7) + 0.02 };
+            if (t === "switch") return { ...s, w: (s.w ?? 0.9) + 0.02, h: (s.h ?? 0.12) + 0.02, d: (s.d ?? 0.35) + 0.02 };
+            if (t === "box" || t === "square") return { ...s, scale: (s.scale || [0.6, 0.3, 0.6]).map((v) => v + 0.02) };
+            return s;
+        };
+
+        if (!visible) return null;
 
         return (
             <group
                 ref={ref}
-                position={node.position || [0, 0, 0]}
-                rotation={node.rotation || [0, 0, 0]}
+                position={position}
+                rotation={rotation}
                 onPointerDown={handlePointerDown}
+                castShadow
+                receiveShadow
             >
-                {/* main body */}
+                {/* main mesh */}
                 <mesh castShadow receiveShadow>
-                    <GeometryForShape shape={shape} />
-                    <meshStandardMaterial
-                        color={baseColor}
-                        emissive={emissiveColor}
-                        emissiveIntensity={emissiveIntensity}
-                        roughness={0.35}
-                        metalness={0.05}
-                    />
+                    <GeometryForShape shape={node.shape} />
+                    <meshStandardMaterial color={baseColor} roughness={0.35} metalness={0.05} />
                 </mesh>
 
-                {/* selection overlay */}
+                {/* selection halo */}
                 {selected && (
-                    <mesh>
-                        <GeometryForShape
-                            shape={{
-                                ...shape,
-                                radius: (shape.radius ?? 0.32) + 0.02,
-                                w: (shape.w ?? 0.5) + 0.02,
-                                h: (shape.h ?? 0.5) + 0.02,
-                                d: (shape.d ?? 0.5) + 0.02,
-                                scale: shape.scale?.map ? shape.scale.map((v) => v + 0.02) : shape.scale
-                            }}
-                        />
-                        <meshBasicMaterial color="#00e1ff" wireframe transparent opacity={0.9} depthWrite={false} />
+                    <mesh renderOrder={9998}>
+                        <GeometryForShape shape={inflateShape(node.shape)} />
+                        <meshBasicMaterial color="#ffffff" transparent opacity={0.18} depthWrite={false} />
                     </mesh>
                 )}
 
                 {/* optional light */}
-                {showLights && light.type && (
+                {showLights && (
                     <>
-                        {light.type === "spot" ? (
+                        <pointLight intensity={0.6} distance={3.5} decay={2} position={[0, yOffset, 0]} />
+                        {showLightBoundsGlobal && <LightBounds center={[0, yOffset, 0]} radius={3.5} />}
+                    </>
+                )}
+
+                {/* labels */}
+                {/* labels */}
+                {/* labels */}
+                {labelsOn && labelText && (
+                    <>
+                        {labelMode === "billboard" && (
+                            <Billboard follow position={[0, yOffset, 0]}>
+                                <Text
+                                    fontSize={labelSize}
+                                    maxWidth={labelMaxWidth}
+                                    anchorX="center"
+                                    anchorY="bottom"
+                                    color="white"
+                                    outlineWidth={0.005}
+                                    outlineColor="#000"
+                                    depthTest={false}
+                                    depthWrite={false}
+                                    renderOrder={9999}
+                                >
+                                    {labelText}
+                                </Text>
+                            </Billboard>
+                        )}
+
+                        {labelMode === "3d" && (
+                            <group position={[0, yOffset, 0]}>
+                                {/* FRONT stack */}
+                                {Array.from({ length: label3DLayers }).map((_, i) => (
+                                    <Text
+                                        key={`f${i}`}
+                                        position={[0, 0, -i * label3DStep]}
+                                        fontSize={labelSize}
+                                        maxWidth={labelMaxWidth}
+                                        anchorX="center"
+                                        anchorY="bottom"
+                                        color={i === 0 ? "white" : "#e5e5e5"}
+                                        outlineWidth={i === 0 ? 0.006 : 0}
+                                        outlineColor="#000"
+                                        depthTest={false}
+                                        depthWrite={false}
+                                        renderOrder={9999}
+                                    >
+                                        {labelText}
+                                    </Text>
+                                ))}
+                                {/* BACK stack (mirrored) */}
+                                <group rotation={[0, Math.PI, 0]}>
+                                    {Array.from({ length: label3DLayers }).map((_, i) => (
+                                        <Text
+                                            key={`b${i}`}
+                                            position={[0, 0, -i * label3DStep]}
+                                            fontSize={labelSize}
+                                            maxWidth={labelMaxWidth}
+                                            anchorX="center"
+                                            anchorY="bottom"
+                                            color={i === 0 ? "white" : "#e5e5e5"}
+                                            outlineWidth={i === 0 ? 0.006 : 0}
+                                            outlineColor="#000"
+                                            depthTest={false}
+                                            depthWrite={false}
+                                            renderOrder={9999}
+                                        >
+                                            {labelText}
+                                        </Text>
+                                    ))}
+                                </group>
+                            </group>
+                        )}
+
+                        {labelMode === "static" && (
                             <>
-                                <spotLight
-                                    ref={spotRef}
-                                    position={[0, 0, 0]}
-                                    intensity={intensity}
-                                    distance={dist}
-                                    angle={(light.angle ?? 25) * (Math.PI / 180)}
-                                    penumbra={0.45}
-                                    color={light.color || baseColor}
-                                    castShadow
-                                />
-                                <object3D ref={targetRef} />
+                                {/* FRONT */}
+                                <group position={[0, yOffset, 0]} rotation={[0, 0, 0]}>
+                                    <Text
+                                        fontSize={labelSize}
+                                        maxWidth={labelMaxWidth}
+                                        anchorX="center"
+                                        anchorY="bottom"
+                                        color="white"
+                                        outlineWidth={0.005}
+                                        outlineColor="#000"
+                                        depthTest={false}
+                                        depthWrite={false}
+                                        renderOrder={9999}
+                                    >
+                                        {labelText}
+                                    </Text>
+                                </group>
+                                {/* BACK (mirrored) */}
+                                <group position={[0, yOffset, 0]} rotation={[0, Math.PI, 0]}>
+                                    <Text
+                                        fontSize={labelSize}
+                                        maxWidth={labelMaxWidth}
+                                        anchorX="center"
+                                        anchorY="bottom"
+                                        color="white"
+                                        outlineWidth={0.005}
+                                        outlineColor="#000"
+                                        depthTest={false}
+                                        depthWrite={false}
+                                        renderOrder={9999}
+                                    >
+                                        {labelText}
+                                    </Text>
+                                </group>
                             </>
-                        ) : (
-                            <pointLight
-                                position={[0, 0, 0]}
-                                intensity={intensity}
-                                distance={dist}
-                                color={light.color || baseColor}
-                                castShadow
-                            />
                         )}
                     </>
                 )}
 
-                {/* visualizer for light extents */}
+
+
+                {/* (Optional) other visuals like LightBounds driven by node.light */}
                 <LightBounds node={node} globalOn={showLightBoundsGlobal} />
             </group>
         );

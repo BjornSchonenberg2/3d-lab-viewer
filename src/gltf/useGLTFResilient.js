@@ -1,7 +1,48 @@
-// src/gltf/useGLTFResilient.js
 import { useEffect, useState } from "react";
+import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { DRACOLoader } from "three/examples/jsm/loaders/DRACOLoader.js";
+
+export async function loadGLTFFallback({ url, urlModifier, dracoCandidates }) {
+  return new Promise((resolve, reject) => {
+    let i = 0;
+
+    const tryLoad = () => {
+      // Use a manager so we can set the URL modifier here (correct API)
+      const manager = new THREE.LoadingManager();
+      if (urlModifier) manager.setURLModifier(urlModifier);
+
+      const loader = new GLTFLoader(manager);
+
+      // Try DRACO candidates until one works
+      const draco = new DRACOLoader(manager);
+      const path = dracoCandidates[i];
+      if (path) {
+        try {
+          draco.setDecoderPath(path);
+          draco.setDecoderConfig({ type: "wasm" });
+          loader.setDRACOLoader(draco);
+        } catch {}
+      }
+
+      loader.load(
+          url,
+          (g) => resolve(g),
+          undefined,
+          (err) => {
+            if (i < dracoCandidates.length - 1) {
+              i += 1;
+              tryLoad();
+            } else {
+              reject(err);
+            }
+          }
+      );
+    };
+
+    tryLoad();
+  });
+}
 
 export function useGLTFResilient(descriptor, onReady) {
   const [gltf, setGltf] = useState(null);
@@ -10,60 +51,31 @@ export function useGLTFResilient(descriptor, onReady) {
   useEffect(() => {
     let cancelled = false;
 
-    async function go() {
+    (async () => {
       if (!descriptor?.url) return;
       try {
-        const loader = new GLTFLoader();
-        loader.setCrossOrigin("anonymous");
-
-        // If descriptor provided a URL modifier (e.g., zip->gltf mapping),
-        // hook it up so external buffers/textures resolve.
-        if (typeof descriptor.urlModifier === "function") {
-          loader.setURLModifier(descriptor.urlModifier);
-        }
-
-        // Optional Meshopt (won’t break if missing)
-        try {
-          const { MeshoptDecoder } = await import(
-              "three/examples/jsm/libs/meshopt_decoder.module.js"
-              );
-          loader.setMeshoptDecoder(MeshoptDecoder);
-        } catch {}
-
-        // DRACO from /public/draco/ (you have this folder)
-        const draco = new DRACOLoader();
-        draco.setDecoderPath("/draco/");
-        draco.setDecoderConfig({ type: "wasm" });
-        draco.preload();
-        loader.setDRACOLoader(draco);
-
-        loader.load(
-            descriptor.url,
-            (g) => {
-              if (cancelled) return;
-              setGltf(g);
-              onReady && onReady(g.scene);
-            },
-            undefined,
-            (e) => {
-              if (cancelled) return;
-              console.error("GLTF load error:", e);
-              setError(e);
-            }
-        );
-      } catch (e) {
+        const candidates = [
+          `${process.env.PUBLIC_URL || ""}/draco/`,
+          "/draco/",
+          "https://www.gstatic.com/draco/v1/decoders/",
+        ];
+        const g = await loadGLTFFallback({
+          url: descriptor.url,
+          urlModifier: descriptor.urlModifier,
+          dracoCandidates: candidates,
+        });
         if (!cancelled) {
-          console.error("GLTF load error:", e);
-          setError(e);
+          setGltf(g);
+          onReady && onReady(g.scene);
         }
+      } catch (e) {
+        if (!cancelled) setError(e);
       }
-    }
+    })();
 
-    go();
     return () => {
-      // IMPORTANT: do not revoke blob URLs here in dev (React 18 Strict re-mount)
-      // If you really want to revoke, do it where you *replace* the descriptor.
       cancelled = true;
+      descriptor?.cleanup && descriptor.cleanup();
     };
   }, [descriptor?.url, descriptor?.urlModifier, onReady]);
 
